@@ -1,0 +1,29 @@
+// To get started, press Ctrl+Space to bring up the completion menu and view the available nodes.
+// For more help, browse the DeviceTree documentation at https://docs.zephyrproject.org/latest/guides/dts/index.html
+
+&arduino_i2c {
+    compatible = "nordic,nrf-twim";
+    clock-frequency = <I2C_BITRATE_FAST>;
+};
+
+&i2c1 {
+    compatible = "nordic,nrf-twim";
+    clock-frequency = <I2C_BITRATE_FAST>;
+    status = "okay";
+};
+
+&pwm0 {
+    status = "disabled";
+};
+
+&spi1 {
+    status = "disabled";
+};
+
+&qspi {
+    status = "disabled";
+};
+
+&arduino_spi {
+    status = "disabled";
+};
