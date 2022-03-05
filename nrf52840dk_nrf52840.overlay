@@ -27,3 +27,14 @@
 &arduino_spi {
     status = "disabled";
 };
+
+/ {
+    imus_irq {
+        compatible = "gpio-keys";
+        imu_0: imu_0 {
+            gpios = <&gpio0 2 (GPIO_PULL_UP | GPIO_ACTIVE_HIGH)>;
+            label = "IMU external IRQ 0";
+        };
+    };
+};
+

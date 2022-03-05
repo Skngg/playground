@@ -46,6 +46,8 @@ static int16_t data_raw_angular_rate[3];
 static float acceleration_mg[3];
 static float angular_rate_mdps[3];
 
+void notify_bt_acc(void);
+
 int32_t platform_write_high(void *i2c_dev, uint8_t reg, const uint8_t *bufp, uint16_t len)
 {
 	return i2c_burst_write(i2c_dev, LSM6DS3_I2C_ADD_H, reg, bufp, len);
@@ -85,10 +87,10 @@ void reset_imu(stmdev_ctx_t *dev, const char *name)
 
 void setup_imu(stmdev_ctx_t *dev)
 {
-	// lsm6ds3_int1_route_t int_1_reg;
+	lsm6ds3_int1_route_t int_1_reg;
 	/* Set Output Data Rate */
-	lsm6ds3_xl_data_rate_set(dev, LSM6DS3_XL_ODR_416Hz);
-	lsm6ds3_gy_data_rate_set(dev, LSM6DS3_GY_ODR_416Hz);
+	lsm6ds3_xl_data_rate_set(dev, LSM6DS3_XL_ODR_1k66Hz);
+	lsm6ds3_gy_data_rate_set(dev, LSM6DS3_GY_ODR_1k66Hz);
 	/* Set full scale */
 	lsm6ds3_xl_full_scale_set(dev, LSM6DS3_2g);
 	lsm6ds3_gy_full_scale_set(dev, LSM6DS3_2000dps);
@@ -98,10 +100,10 @@ void setup_imu(stmdev_ctx_t *dev)
 	lsm6ds3_xl_hp_path_internal_set(dev, LSM6DS3_USE_HPF);
 	/* LPF2 on 6D function selection */
 	lsm6ds3_6d_feed_data_set(dev, LSM6DS3_LPF2_FEED);
-	/* Enable interrupt generation on 6D INT1 pin */
-	// lsm6ds3_pin_int1_route_get(dev, &int_1_reg);
-	// int_1_reg.int1_6d = PROPERTY_ENABLE;
-	// lsm6ds3_pin_int1_route_set(dev, &int_1_reg);
+	/* Enable interrupt generation on XL DRDY INT1 pin */
+	lsm6ds3_pin_int1_route_get(dev, &int_1_reg);
+	int_1_reg.int1_drdy_xl = PROPERTY_ENABLE;
+	lsm6ds3_pin_int1_route_set(dev, &int_1_reg);
 }
 
 void read_imu_full(sensor_t *sensor)
@@ -144,52 +146,6 @@ void read_imu_full(sensor_t *sensor)
 	}
 }
 
-/* void read_imu_orient(stmdev_ctx_t *dev_ctx)
-{
-	lsm6ds3_all_src_t all_source;
-	// Check if 6D Orientation events
-	lsm6ds3_all_sources_get(dev_ctx, &all_source);
-
-	if (all_source.d6d_src.d6d_ia)
-	{
-		sprintf((char *)tx_buffer, "6D Or. switched to ");
-
-		if (all_source.d6d_src.xh)
-		{
-			strcat((char *)tx_buffer, "XH");
-		}
-
-		if (all_source.d6d_src.xl)
-		{
-			strcat((char *)tx_buffer, "XL");
-		}
-
-		if (all_source.d6d_src.yh)
-		{
-			strcat((char *)tx_buffer, "YH");
-		}
-
-		if (all_source.d6d_src.yl)
-		{
-			strcat((char *)tx_buffer, "YL");
-		}
-
-		if (all_source.d6d_src.zh)
-		{
-			strcat((char *)tx_buffer, "ZH");
-		}
-
-		if (all_source.d6d_src.zl)
-		{
-			strcat((char *)tx_buffer, "ZL");
-		}
-
-		strcat((char *)tx_buffer, "\r\n");
-
-		printk("%s", tx_buffer);
-	}
-} */
-
 void reset_all_imus()
 {
 	uint8_t i;
@@ -216,6 +172,7 @@ void read_all_imu_full_handler(struct k_work *work)
 		read_imu_full(imu_sensor_list[i]);
 	}
 	LOG_DBG("----------------------------------------------------");
+	notify_bt_acc();
 }
 
 K_WORK_DEFINE(read_all_imu_full, read_all_imu_full_handler);
@@ -229,14 +186,33 @@ K_TIMER_DEFINE(imu_timer_periodic, periodic_trigger_read_all_imu_full, NULL);
 const struct device *i2c0_dev = DEVICE_DT_GET(DT_NODELABEL(i2c0));
 const struct device *i2c1_dev = DEVICE_DT_GET(DT_NODELABEL(i2c1));
 
+static const struct gpio_dt_spec imu0_irq = GPIO_DT_SPEC_GET_OR(DT_NODELABEL(imu_0), gpios, {0});
+static struct gpio_callback button_cb_data;
+
+void read_imu_full_handler(struct k_work *work)
+{
+	read_imu_full(imu_sensor_list[0]);
+}
+K_WORK_DEFINE(read_one_imu_full, read_imu_full_handler);
+
+void button_pressed(const struct device *dev, struct gpio_callback *cb,
+					uint32_t pins)
+{
+	k_work_submit(&read_one_imu_full);
+}
+
 // BT APP REQUIREMENTS
 /* Button value. */
 static uint16_t but_val;
+static uint16_t but_tim_val;
 
 /* Prototype */
-static ssize_t recv(struct bt_conn *conn,
-		    const struct bt_gatt_attr *attr, const void *buf,
-		    uint16_t len, uint16_t offset, uint8_t flags);
+static ssize_t writer(struct bt_conn *conn,
+					  const struct bt_gatt_attr *attr, const void *buf,
+					  uint16_t len, uint16_t offset, uint8_t flags);
+static ssize_t read(struct bt_conn *conn,
+					const struct bt_gatt_attr *attr, const void *buf,
+					uint16_t len, uint16_t offset);
 
 /* ST Custom Service  */
 static struct bt_uuid_128 st_service_uuid = BT_UUID_INIT_128(
@@ -273,8 +249,7 @@ static uint8_t manuf_data[ADV_LEN] = {
 static const struct bt_data ad[] = {
 	BT_DATA_BYTES(BT_DATA_FLAGS, (BT_LE_AD_GENERAL | BT_LE_AD_NO_BREDR)),
 	BT_DATA(BT_DATA_NAME_COMPLETE, DEVICE_NAME, DEVICE_NAME_LEN),
-	BT_DATA(BT_DATA_MANUFACTURER_DATA, manuf_data, ADV_LEN)
-};
+	BT_DATA(BT_DATA_MANUFACTURER_DATA, manuf_data, ADV_LEN)};
 
 /* BLE connection */
 struct bt_conn *conn;
@@ -293,60 +268,121 @@ static void mpu_ccc_cfg_changed(const struct bt_gatt_attr *attr, uint16_t value)
  */
 
 /* ST BLE Sensor GATT services and characteristic */
-
+static uint8_t bt_data[16] = {0xAA, 0xAA, 0xAA};
 BT_GATT_SERVICE_DEFINE(stsensor_svc,
-BT_GATT_PRIMARY_SERVICE(&st_service_uuid),
-BT_GATT_CHARACTERISTIC(&led_char_uuid.uuid,
-		       BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE_WITHOUT_RESP,
-		       BT_GATT_PERM_WRITE, NULL, recv, (void *)1),
-BT_GATT_CHARACTERISTIC(&but_notif_uuid.uuid, BT_GATT_CHRC_NOTIFY,
-		       BT_GATT_PERM_READ, NULL, NULL, &but_val),
-BT_GATT_CCC(mpu_ccc_cfg_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE),
-);
+					   BT_GATT_PRIMARY_SERVICE(&st_service_uuid),
+					   BT_GATT_CHARACTERISTIC(&led_char_uuid.uuid,
+											  BT_GATT_CHRC_READ | BT_GATT_CHRC_WRITE_WITHOUT_RESP,
+											  BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
+											  read, writer, bt_data),
+					   BT_GATT_CHARACTERISTIC(&but_notif_uuid.uuid, BT_GATT_CHRC_NOTIFY,
+											  BT_GATT_PERM_READ, NULL, NULL, &but_val),
+					   BT_GATT_CCC(mpu_ccc_cfg_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE), );
 
-static ssize_t recv(struct bt_conn *conn,
-		    const struct bt_gatt_attr *attr, const void *buf,
-		    uint16_t len, uint16_t offset, uint8_t flags)
+void print_array(char *dest, const uint8_t *src, uint16_t len)
+{
+	for (uint16_t i = 0; i < len; ++i)
+	{
+		char hex_byte[3];
+		sprintf(hex_byte, "%X", src[i]);
+		strcat(dest, hex_byte);
+	}
+	strcat(dest, "\0");
+}
+
+static ssize_t writer(struct bt_conn *conn,
+					  const struct bt_gatt_attr *attr, const void *buf,
+					  uint16_t len, uint16_t offset, uint8_t flags)
 {
 	led_update(0);
+	uint8_t *value = attr->user_data;
+	memcpy(value + offset, buf, len);
+
+	char array[2 * CONFIG_BT_CTLR_DATA_LENGTH_MAX + 3] = "0x";
+	print_array(array, (uint8_t *)buf, len);
+	LOG_INF("Received BT %s", array);
+	value[offset + len] = 0;
+	k_work_submit(&read_all_imu_full);
 
 	return 0;
 }
 
+static ssize_t read(struct bt_conn *conn,
+					const struct bt_gatt_attr *attr, const void *buf,
+					uint16_t len, uint16_t offset)
+{
+	const uint8_t *value = attr->user_data;
+	char array[2 * CONFIG_BT_CTLR_DATA_LENGTH_MAX + 3] = "0x";
+	print_array(array, value, strlen((char *)value));
+	LOG_DBG("SEND %s", array);
+	// LOG_DBG("send %s",print_array(array,(uint8_t*)buf,len,0));
+
+	return bt_gatt_attr_read(conn, attr, buf, len, offset, value,
+							 strlen(value));
+}
+
 static void button_callback(const struct device *gpiob, struct gpio_callback *cb,
-		     uint32_t pins)
+							uint32_t pins)
 {
 	int err;
-
-	LOG_INF("Button pressed");
-	if (conn) {
-		if (notify_enable) {
-			err = bt_gatt_notify(NULL, &stsensor_svc.attrs[4],
-					     &but_val, sizeof(but_val));
-			if (err) {
-				LOG_ERR("Notify error: %d", err);
-			} else {
-				LOG_INF("Send notify ok");
-				but_val = (but_val == 0) ? 0x100 : 0;
-			}
-		} else {
-			LOG_INF("Notify not enabled");
+	if (pins == GPIO_IN_PIN12_Msk)
+	{
+		if (but_tim_val == 0)
+		{
+			LOG_INF("TIMER started");
+			k_timer_start(&imu_timer_periodic, K_SECONDS(3), K_SECONDS(3));
 		}
-	} else {
-		LOG_INF("BLE not connected");
+		else
+		{
+			LOG_INF("TIMER stopped");
+			k_timer_stop(&imu_timer_periodic);
+		}
+		but_tim_val = (but_tim_val == 0) ? 0x100 : 0;
+	}
+	else
+	{
+
+		LOG_INF("Button pressed");
+		if (conn)
+		{
+			if (notify_enable)
+			{
+				err = bt_gatt_notify(NULL, &stsensor_svc.attrs[4],
+									 &but_val, sizeof(but_val));
+				if (err)
+				{
+					LOG_ERR("Notify error: %d", err);
+				}
+				else
+				{
+					LOG_INF("Send notify ok");
+					but_val = (but_val == 0) ? 0x110 : 0;
+				}
+			}
+			else
+			{
+				LOG_INF("Notify not enabled");
+			}
+		}
+		else
+		{
+			LOG_INF("BLE not connected");
+		}
 	}
 }
 
 static void bt_ready(int err)
 {
-	if (err) {
+	if (err)
+	{
 		LOG_ERR("Bluetooth init failed (err %d)", err);
 		return;
 	}
 	LOG_INF("Bluetooth initialized");
 	/* Start advertising */
 	err = bt_le_adv_start(BT_LE_ADV_CONN, ad, ARRAY_SIZE(ad), NULL, 0);
-	if (err) {
+	if (err)
+	{
 		LOG_ERR("Advertising failed to start (err %d)", err);
 		return;
 	}
@@ -356,24 +392,31 @@ static void bt_ready(int err)
 
 static void connected(struct bt_conn *connected, uint8_t err)
 {
-	if (err) {
+	if (err)
+	{
 		LOG_ERR("Connection failed (err %u)", err);
-	} else {
+	}
+	else
+	{
 		LOG_INF("Connected");
-		if (!conn) {
+		if (!conn)
+		{
 			conn = bt_conn_ref(connected);
 		}
+		led_update(1);
 	}
 }
 
 static void disconnected(struct bt_conn *disconn, uint8_t reason)
 {
-	if (conn) {
+	if (conn)
+	{
 		bt_conn_unref(conn);
 		conn = NULL;
 	}
 
 	LOG_INF("Disconnected (reason %u)", reason);
+	led_update(1);
 }
 
 BT_CONN_CB_DEFINE(conn_callbacks) = {
@@ -381,6 +424,31 @@ BT_CONN_CB_DEFINE(conn_callbacks) = {
 	.disconnected = disconnected,
 };
 // BT APP REQUIREMENTS END
+
+void notify_bt_acc()
+{
+	int err;
+	if (conn)
+	{
+		if (notify_enable)
+		{
+			err = bt_gatt_notify(NULL, &stsensor_svc.attrs[4],
+								 &data_raw_acceleration[2], sizeof(int16_t));
+			if (err)
+			{
+				LOG_ERR("Notify error: %d", err);
+			}
+			else
+			{
+				LOG_INF("Send notify %d hex: 0x%X", data_raw_acceleration[2], data_raw_acceleration[2]);
+			}
+		}
+		else
+		{
+			LOG_INF("Notify not enabled");
+		}
+	}
+}
 
 void main(void)
 {
@@ -410,6 +478,33 @@ void main(void)
 	imu_sensor_list[1] = &imu_rt;
 	imu_sensor_list[2] = &imu_lc;
 	imu_sensor_list[3] = &imu_rc;
+
+	if (!device_is_ready(imu0_irq.port))
+	{
+		LOG_ERR("Error: button device %s is not ready",
+				imu0_irq.port->name);
+		return;
+	}
+	int ret = gpio_pin_configure_dt(&imu0_irq, GPIO_INPUT);
+	if (ret != 0)
+	{
+		LOG_ERR("Error %d: failed to configure %s pin %d",
+				ret, imu0_irq.port->name, imu0_irq.pin);
+		return;
+	}
+
+	ret = gpio_pin_interrupt_configure_dt(&imu0_irq,
+										  GPIO_INT_EDGE_TO_ACTIVE);
+	if (ret != 0)
+	{
+		LOG_ERR("Error %d: failed to configure interrupt on %s pin %d",
+				ret, imu0_irq.port->name, imu0_irq.pin);
+		return;
+	}
+
+	gpio_init_callback(&button_cb_data, button_pressed, BIT(imu0_irq.pin));
+	gpio_add_callback(imu0_irq.port, &button_cb_data);
+	LOG_INF("Set up button at %s pin %d\n", imu0_irq.port->name, imu0_irq.pin);
 
 	if (!device_is_ready(i2c0_dev))
 	{
