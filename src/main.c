@@ -32,22 +32,10 @@
 
 LOG_MODULE_REGISTER(MAIN_MODULE, 4);
 
-typedef struct sensor_t
-{
-	stmdev_ctx_t *stm_dev;
-	char *name;
-} sensor_t;
-
-static sensor_t *imu_sensor_list[IMU_SENSOR_AMOUNT];
-// static volatile uint8_t tx_buffer[1000];
-
-static int16_t data_raw_acceleration[3];
-static int16_t data_raw_angular_rate[3];
-static float acceleration_mg[3];
-static float angular_rate_mdps[3];
-
 void notify_bt_acc(void);
 
+// |--STM device write/read handlers---
+#pragma region STM_device_handlers
 int32_t platform_write_high(void *i2c_dev, uint8_t reg, const uint8_t *bufp, uint16_t len)
 {
 	return i2c_burst_write(i2c_dev, LSM6DS3_I2C_ADD_H, reg, bufp, len);
@@ -65,6 +53,24 @@ int32_t platform_read(void *i2c_dev, uint8_t reg, uint8_t *bufp, uint16_t len)
 {
 	return i2c_burst_read(i2c_dev, LSM6DS3_I2C_ADD_L, reg, bufp, len);
 }
+#pragma endregion
+// ---STM device write/read handlers--|
+
+// |--IMU helper functions---
+#pragma region IMU_helper_functions
+typedef struct sensor_t
+{
+	stmdev_ctx_t *stm_dev;
+	char *name;
+} sensor_t;
+
+static sensor_t *imu_sensor_list[IMU_SENSOR_AMOUNT];
+static uint8_t imu_work_selector = 0xFF;
+
+static int16_t data_raw_acceleration[3];
+static int16_t data_raw_angular_rate[3];
+static float acceleration_mg[3];
+static float angular_rate_mdps[3];
 
 void reset_imu(stmdev_ctx_t *dev, const char *name)
 {
@@ -183,25 +189,59 @@ void periodic_trigger_read_all_imu_full(struct k_timer *dummy)
 }
 K_TIMER_DEFINE(imu_timer_periodic, periodic_trigger_read_all_imu_full, NULL);
 
-const struct device *i2c0_dev = DEVICE_DT_GET(DT_NODELABEL(i2c0));
-const struct device *i2c1_dev = DEVICE_DT_GET(DT_NODELABEL(i2c1));
-
-static const struct gpio_dt_spec imu0_irq = GPIO_DT_SPEC_GET_OR(DT_NODELABEL(imu_0), gpios, {0});
-static struct gpio_callback button_cb_data;
-
 void read_imu_full_handler(struct k_work *work)
 {
-	read_imu_full(imu_sensor_list[0]);
+	if (0xFF == imu_work_selector) return;
+	read_imu_full(imu_sensor_list[imu_work_selector]);
 }
 K_WORK_DEFINE(read_one_imu_full, read_imu_full_handler);
+#pragma endregion
+// ---IMU helper functions--|
 
-void button_pressed(const struct device *dev, struct gpio_callback *cb,
+// |--I2C device definition---
+#pragma region I2C_device_definition
+const struct device *i2c0_dev = DEVICE_DT_GET(DT_NODELABEL(i2c0));
+const struct device *i2c1_dev = DEVICE_DT_GET(DT_NODELABEL(i2c1));
+#pragma endregion
+// ---I2C device definition--|
+
+// |--IMU IRQ callback---
+#pragma region IMU_IRQ_callback
+static const struct gpio_dt_spec imu0_irq = GPIO_DT_SPEC_GET_OR(DT_NODELABEL(imu_0), gpios, {0});
+static const struct gpio_dt_spec imu1_irq = GPIO_DT_SPEC_GET_OR(DT_NODELABEL(imu_1), gpios, {0});
+static const struct gpio_dt_spec imu2_irq = GPIO_DT_SPEC_GET_OR(DT_NODELABEL(imu_2), gpios, {0});
+static const struct gpio_dt_spec imu3_irq = GPIO_DT_SPEC_GET_OR(DT_NODELABEL(imu_3), gpios, {0});
+static struct gpio_callback button_cb_data;
+
+void imu_irq_triggered(const struct device *dev, struct gpio_callback *cb,
 					uint32_t pins)
 {
+	switch (pins)
+	{
+	case GPIO_IN_PIN10_Msk:
+		imu_work_selector = 0;
+		break;
+	case GPIO_IN_PIN11_Msk:
+		imu_work_selector = 1;
+		break;
+	case GPIO_IN_PIN12_Msk:
+		imu_work_selector = 2;
+		break;
+	case GPIO_IN_PIN13_Msk:
+		imu_work_selector = 3;
+		break;	
+	default:
+		imu_work_selector = 0xFF;
+		return;
+		break;
+	}
 	k_work_submit(&read_one_imu_full);
 }
+#pragma endregion
+// ---IMU IRQ callback--|
 
-// BT APP REQUIREMENTS
+// |--BLUETOOTH---
+#pragma region BLUETOOTH
 /* Button value. */
 static uint16_t but_val;
 static uint16_t but_tim_val;
@@ -419,12 +459,6 @@ static void disconnected(struct bt_conn *disconn, uint8_t reason)
 	led_update(1);
 }
 
-BT_CONN_CB_DEFINE(conn_callbacks) = {
-	.connected = connected,
-	.disconnected = disconnected,
-};
-// BT APP REQUIREMENTS END
-
 void notify_bt_acc()
 {
 	int err;
@@ -450,6 +484,15 @@ void notify_bt_acc()
 	}
 }
 
+BT_CONN_CB_DEFINE(conn_callbacks) = {
+	.connected = connected,
+	.disconnected = disconnected,
+};
+#pragma endregion
+// ---BLUETOOTH--|
+
+// |--MAIN---
+#pragma region MAIN
 void main(void)
 {
 
@@ -502,7 +545,7 @@ void main(void)
 		return;
 	}
 
-	gpio_init_callback(&button_cb_data, button_pressed, BIT(imu0_irq.pin));
+	gpio_init_callback(&button_cb_data, imu_irq_triggered, BIT(imu0_irq.pin));
 	gpio_add_callback(imu0_irq.port, &button_cb_data);
 	LOG_INF("Set up button at %s pin %d\n", imu0_irq.port->name, imu0_irq.pin);
 
@@ -559,3 +602,5 @@ void main(void)
 	}
 	// BT APP END
 }
+#pragma endregion
+// ---MAIN--|
