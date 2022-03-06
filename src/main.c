@@ -95,21 +95,22 @@ void setup_imu(stmdev_ctx_t *dev)
 {
 	lsm6ds3_int1_route_t int_1_reg;
 	/* Set Output Data Rate */
-	lsm6ds3_xl_data_rate_set(dev, LSM6DS3_XL_ODR_1k66Hz);
-	lsm6ds3_gy_data_rate_set(dev, LSM6DS3_GY_ODR_1k66Hz);
+	lsm6ds3_xl_data_rate_set(dev, LSM6DS3_XL_ODR_12Hz5);
+	lsm6ds3_gy_data_rate_set(dev, LSM6DS3_GY_ODR_12Hz5);
 	/* Set full scale */
 	lsm6ds3_xl_full_scale_set(dev, LSM6DS3_2g);
 	lsm6ds3_gy_full_scale_set(dev, LSM6DS3_2000dps);
+	lsm6ds3_block_data_update_set(dev,PROPERTY_ENABLE);
 	/* Set threshold to 60 degrees */
 	// lsm6ds3_6d_threshold_set(dev, LSM6DS3_DEG_50);
 	/* Use HP filter */
-	lsm6ds3_xl_hp_path_internal_set(dev, LSM6DS3_USE_HPF);
+	// lsm6ds3_xl_hp_path_internal_set(dev, LSM6DS3_USE_HPF);
 	/* LPF2 on 6D function selection */
-	lsm6ds3_6d_feed_data_set(dev, LSM6DS3_LPF2_FEED);
+	// lsm6ds3_6d_feed_data_set(dev, LSM6DS3_LPF2_FEED);
 	/* Enable interrupt generation on XL DRDY INT1 pin */
-	lsm6ds3_pin_int1_route_get(dev, &int_1_reg);
-	int_1_reg.int1_drdy_xl = PROPERTY_ENABLE;
-	lsm6ds3_pin_int1_route_set(dev, &int_1_reg);
+	// lsm6ds3_pin_int1_route_get(dev, &int_1_reg);
+	// int_1_reg.int1_drdy_xl = PROPERTY_DISABLE;
+	// lsm6ds3_pin_int1_route_set(dev, &int_1_reg);
 }
 
 void read_imu_full(sensor_t *sensor)
@@ -189,11 +190,7 @@ void periodic_trigger_read_all_imu_full(struct k_timer *dummy)
 }
 K_TIMER_DEFINE(imu_timer_periodic, periodic_trigger_read_all_imu_full, NULL);
 
-void read_imu_full_handler(struct k_work *work)
-{
-	if (0xFF == imu_work_selector) return;
-	read_imu_full(imu_sensor_list[imu_work_selector]);
-}
+void read_imu_full_handler(struct k_work *work);
 K_WORK_DEFINE(read_one_imu_full, read_imu_full_handler);
 #pragma endregion
 // ---IMU helper functions--|
@@ -235,8 +232,20 @@ void imu_irq_triggered(const struct device *dev, struct gpio_callback *cb,
 		return;
 		break;
 	}
+	LOG_DBG("-----------------------IMU IRQ %X",imu_work_selector);
 	k_work_submit(&read_one_imu_full);
 }
+
+void imu_irq_toggle_handler()
+{
+	unsigned int key = irq_lock();
+	lsm6ds3_int1_route_t int_1_reg;
+	lsm6ds3_pin_int1_route_get(imu_sensor_list[0]->stm_dev, &int_1_reg);
+	int_1_reg.int1_drdy_g = int_1_reg.int1_drdy_g == PROPERTY_ENABLE ? PROPERTY_DISABLE : PROPERTY_ENABLE;
+	lsm6ds3_pin_int1_route_set(imu_sensor_list[0]->stm_dev, &int_1_reg);
+	irq_unlock(key);
+}
+K_WORK_DEFINE(imu0_irq_toggle, imu_irq_toggle_handler);
 #pragma endregion
 // ---IMU IRQ callback--|
 
@@ -308,7 +317,7 @@ static void mpu_ccc_cfg_changed(const struct bt_gatt_attr *attr, uint16_t value)
  */
 
 /* ST BLE Sensor GATT services and characteristic */
-static uint8_t bt_data[16] = {0xAA, 0xAA, 0xAA};
+static uint8_t bt_data[16] = {0xAA, 0xBB, 0xCC, 0xCD, 0xBC, 0xAB};
 BT_GATT_SERVICE_DEFINE(stsensor_svc,
 					   BT_GATT_PRIMARY_SERVICE(&st_service_uuid),
 					   BT_GATT_CHARACTERISTIC(&led_char_uuid.uuid,
@@ -316,7 +325,7 @@ BT_GATT_SERVICE_DEFINE(stsensor_svc,
 											  BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
 											  read, writer, bt_data),
 					   BT_GATT_CHARACTERISTIC(&but_notif_uuid.uuid, BT_GATT_CHRC_NOTIFY,
-											  BT_GATT_PERM_READ, NULL, NULL, &but_val),
+											  BT_GATT_PERM_READ, NULL, NULL, &bt_data),
 					   BT_GATT_CCC(mpu_ccc_cfg_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE), );
 
 void print_array(char *dest, const uint8_t *src, uint16_t len)
@@ -364,6 +373,7 @@ static ssize_t read(struct bt_conn *conn,
 static void button_callback(const struct device *gpiob, struct gpio_callback *cb,
 							uint32_t pins)
 {
+	// unsigned int key = irq_lock();
 	int err;
 	if (pins == GPIO_IN_PIN12_Msk)
 	{
@@ -383,6 +393,7 @@ static void button_callback(const struct device *gpiob, struct gpio_callback *cb
 	{
 
 		LOG_INF("Button pressed");
+		k_work_submit(&imu0_irq_toggle);
 		if (conn)
 		{
 			if (notify_enable)
@@ -409,6 +420,7 @@ static void button_callback(const struct device *gpiob, struct gpio_callback *cb
 			LOG_INF("BLE not connected");
 		}
 	}
+	// irq_unlock(key);
 }
 
 static void bt_ready(int err)
@@ -491,6 +503,40 @@ BT_CONN_CB_DEFINE(conn_callbacks) = {
 #pragma endregion
 // ---BLUETOOTH--|
 
+void read_imu_full_handler(struct k_work *work)
+{
+	if (0xFF == imu_work_selector) return;
+	unsigned int key = irq_lock();
+	read_imu_full(imu_sensor_list[imu_work_selector]);
+	int err;
+	if (conn)
+	{
+		if (notify_enable)
+		{
+			err = bt_gatt_notify(NULL, &stsensor_svc.attrs[4],
+								 &data_raw_acceleration, 3*sizeof(int16_t));
+			if (err)
+			{
+				LOG_ERR("Notify error: %d", err);
+			}
+			else
+			{
+				LOG_INF("Send notify: 0x%X 0x%X 0x%X", data_raw_acceleration[0], data_raw_acceleration[1], data_raw_acceleration[2]);
+			}
+		}
+		else
+		{
+			LOG_INF("Notify not enabled");
+		}
+	}
+	else
+	{
+		LOG_INF("BLE not connected");
+	}
+	imu_work_selector=0xFF;
+	irq_unlock(key);
+}
+
 // |--MAIN---
 #pragma region MAIN
 void main(void)
@@ -528,7 +574,7 @@ void main(void)
 				imu0_irq.port->name);
 		return;
 	}
-	int ret = gpio_pin_configure_dt(&imu0_irq, GPIO_INPUT);
+	int ret = gpio_pin_configure_dt(&imu0_irq, GPIO_INPUT | GPIO_INT_DEBOUNCE);
 	if (ret != 0)
 	{
 		LOG_ERR("Error %d: failed to configure %s pin %d",
@@ -544,10 +590,10 @@ void main(void)
 				ret, imu0_irq.port->name, imu0_irq.pin);
 		return;
 	}
-
+	
 	gpio_init_callback(&button_cb_data, imu_irq_triggered, BIT(imu0_irq.pin));
 	gpio_add_callback(imu0_irq.port, &button_cb_data);
-	LOG_INF("Set up button at %s pin %d\n", imu0_irq.port->name, imu0_irq.pin);
+	LOG_INF("Set up button at %s pin %d", imu0_irq.port->name, imu0_irq.pin);
 
 	if (!device_is_ready(i2c0_dev))
 	{
@@ -577,7 +623,6 @@ void main(void)
 
 	LOG_INF("Starting system");
 	k_msleep(1000);
-	// k_timer_start(&imu_timer_periodic, K_SECONDS(3), K_SECONDS(3));
 
 	// BT APP
 	int err;

@@ -32,19 +32,19 @@
     imus_irq {
         compatible = "gpio-keys";
         imu_0: imu_0 {
-            gpios = <&gpio1 10 (GPIO_PULL_UP | GPIO_ACTIVE_HIGH)>;
+            gpios = <&gpio1 10 (GPIO_PUSH_PULL | GPIO_ACTIVE_HIGH)>;
             label = "IMU external IRQ 0";
         };
         imu_1: imu_1 {
-            gpios = <&gpio1 11 (GPIO_PULL_UP | GPIO_ACTIVE_HIGH)>;
+            gpios = <&gpio1 11 (GPIO_PUSH_PULL | GPIO_ACTIVE_HIGH)>;
             label = "IMU external IRQ 1";
         };
         imu_2: imu_2 {
-            gpios = <&gpio1 12 (GPIO_PULL_UP | GPIO_ACTIVE_HIGH)>;
+            gpios = <&gpio1 12 (GPIO_PUSH_PULL | GPIO_ACTIVE_HIGH)>;
             label = "IMU external IRQ 2";
         };
         imu_3: imu_3 {
-            gpios = <&gpio1 13 (GPIO_PULL_UP | GPIO_ACTIVE_HIGH)>;
+            gpios = <&gpio1 13 (GPIO_PUSH_PULL | GPIO_ACTIVE_HIGH)>;
             label = "IMU external IRQ 3";
         };
     };
