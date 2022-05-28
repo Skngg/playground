@@ -19,6 +19,9 @@ extern "C" {
 
 int button_init(gpio_callback_handler_t handler);
 
+void button_callback(const struct device *gpiob, struct gpio_callback *cb,
+                     uint32_t pins);
+
 #ifdef __cplusplus
 }
 #endif

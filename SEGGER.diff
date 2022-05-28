@@ -1,0 +1,50 @@
+diff --git a/SEGGER/SEGGER_RTT.c b/SEGGER/SEGGER_RTT.c
+index 63b474c..a477e1c 100644
+--- a/SEGGER/SEGGER_RTT.c
++++ b/SEGGER/SEGGER_RTT.c
+@@ -270,6 +270,13 @@ SEGGER_RTT_PUT_CB_SECTION(SEGGER_RTT_CB_ALIGN(SEGGER_RTT_CB _SEGGER_RTT));
+ SEGGER_RTT_PUT_BUFFER_SECTION(SEGGER_RTT_BUFFER_ALIGN(static char _acUpBuffer  [SEGGER_RTT__ROUND_UP_2_CACHE_LINE_SIZE(BUFFER_SIZE_UP)]));
+ SEGGER_RTT_PUT_BUFFER_SECTION(SEGGER_RTT_BUFFER_ALIGN(static char _acDownBuffer[SEGGER_RTT__ROUND_UP_2_CACHE_LINE_SIZE(BUFFER_SIZE_DOWN)]));
+ 
++//
++// RTT Control Block and allocate buffers for channel 1
++//
++SEGGER_RTT_PUT_CB_SECTION(SEGGER_RTT_CB_ALIGN(SEGGER_RTT_CB _SEGGER_RTT));
++SEGGER_RTT_PUT_BUFFER_SECTION(SEGGER_RTT_BUFFER_ALIGN(static char _acUpBuffer1  [SEGGER_RTT__ROUND_UP_2_CACHE_LINE_SIZE(BUFFER_SIZE_UP)]));
++SEGGER_RTT_PUT_BUFFER_SECTION(SEGGER_RTT_BUFFER_ALIGN(static char _acDownBuffer1[SEGGER_RTT__ROUND_UP_2_CACHE_LINE_SIZE(BUFFER_SIZE_DOWN)]));
++
+ static unsigned char _ActiveTerminal;
+ 
+ /*********************************************************************
+@@ -316,6 +323,15 @@ static void _DoInit(void) {
+   p->aUp[0].WrOff         = 0u;
+   p->aUp[0].Flags         = SEGGER_RTT_MODE_DEFAULT;
+   //
++  // Initialize up buffer 1
++  //
++  p->aUp[1].sName         = "Logger";
++  p->aUp[1].pBuffer       = _acUpBuffer1;
++  p->aUp[1].SizeOfBuffer  = BUFFER_SIZE_UP;
++  p->aUp[1].RdOff         = 0u;
++  p->aUp[1].WrOff         = 0u;
++  p->aUp[1].Flags         = SEGGER_RTT_MODE_BLOCK_IF_FIFO_FULL;
++  //
+   // Initialize down buffer 0
+   //
+   p->aDown[0].sName         = "Terminal";
+@@ -325,6 +341,15 @@ static void _DoInit(void) {
+   p->aDown[0].WrOff         = 0u;
+   p->aDown[0].Flags         = SEGGER_RTT_MODE_DEFAULT;
+   //
++  // Initialize down buffer 1
++  //
++  p->aDown[1].sName         = "Logger";
++  p->aDown[1].pBuffer       = _acDownBuffer1;
++  p->aDown[1].SizeOfBuffer  = BUFFER_SIZE_DOWN;
++  p->aDown[1].RdOff         = 0u;
++  p->aDown[1].WrOff         = 0u;
++  p->aDown[1].Flags         = SEGGER_RTT_MODE_BLOCK_IF_FIFO_FULL;
++  //
+   // Finish initialization of the control block.
+   // Copy Id string in three steps to make sure "SEGGER RTT" is not found
+   // in initializer memory (usually flash) by J-Link
