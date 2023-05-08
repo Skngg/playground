@@ -40,11 +40,12 @@ void setup_imu(stmdev_ctx_t *dev)
 	lsm6ds3_int1_route_t int_1_reg;
 	/* Set full scale */
 	lsm6ds3_xl_full_scale_set(dev, LSM6DS3_2g);
-	lsm6ds3_gy_full_scale_set(dev, LSM6DS3_500dps);
+	lsm6ds3_gy_full_scale_set(dev, LSM6DS3_250dps);
 	lsm6ds3_block_data_update_set(dev, PROPERTY_ENABLE);
 	lsm6ds3_pin_mode_set(dev, LSM6DS3_PUSH_PULL);
 	lsm6ds3_pin_polarity_set(dev, LSM6DS3_ACTIVE_HIGH);
 	lsm6ds3_gy_hp_bandwidth_set(dev, LSM6DS3_HP_CUT_OFF_2Hz07);
+	lsm6ds3_xl_filter_analog_set(dev,LSM6DS3_ANTI_ALIASING_50Hz);
 
 	/* Set FIFO */
 	lsm6ds3_fifo_gy_batch_set(dev, LSM6DS3_FIFO_GY_NO_DEC);
@@ -119,11 +120,11 @@ void read_slow_imu(sensor_t *sensor)
 	if (0 != data_raw_angular_rate[0])
 	{
 		angular_rate_mdps[0] =
-			lsm6ds3_from_fs500dps_to_mdps(data_raw_angular_rate[0]);
+			lsm6ds3_from_fs250dps_to_mdps(data_raw_angular_rate[0]);
 		angular_rate_mdps[1] =
-			lsm6ds3_from_fs500dps_to_mdps(data_raw_angular_rate[1]);
+			lsm6ds3_from_fs250dps_to_mdps(data_raw_angular_rate[1]);
 		angular_rate_mdps[2] =
-			lsm6ds3_from_fs500dps_to_mdps(data_raw_angular_rate[2]);
+			lsm6ds3_from_fs250dps_to_mdps(data_raw_angular_rate[2]);
 		LOG_DBG("%s\tAngular rate [mdps]:\t%4d\t%4d\t%4d", sensor->name, (int)angular_rate_mdps[0], (int)angular_rate_mdps[1], (int)angular_rate_mdps[2]);
 	}
 }
@@ -167,8 +168,9 @@ void read_fast_all_imus()
 int read_fifo_imu(sensor_t *sensor)
 {
 	stmdev_ctx_t *dev_ctx = sensor->stm_dev;
+	// static int16_t words[96];
 
-	/* Read acceleration field data */
+	/* Read FIFO data level */
 	uint16_t num_of_words = 0;
 	lsm6ds3_fifo_data_level_get(dev_ctx, &num_of_words);
 
@@ -178,18 +180,20 @@ int read_fifo_imu(sensor_t *sensor)
 		{
 			LOG_ERR("FIFO data may be incomplete: num_of_words (%u) not a multiple of 6", num_of_words);
 		}
-		// LOG_DBG("%s\tnum of words: %u",sensor->name,num_of_words);
+		// LOG_DBG("%s\tnum of words: %u", sensor->name, num_of_words);
 		const uint16_t num_of_sets = num_of_words % 6 == 0 ? (num_of_words / 6) : (num_of_words / 6) + 1;
 		int16_t words[6 * num_of_sets];
+		
+		memset(words, 0, 12 * num_of_sets);
 
-		memset(words, num_of_words, sizeof(int16_t));
-
-		lsm6ds3_fifo_raw_data_get(dev_ctx, &(words[sensor->fifo_pattern_counter]), num_of_words);
-		sensor->fifo_pattern_counter = (sensor->fifo_pattern_counter + num_of_words % 6) % 6;
+		// lsm6ds3_fifo_raw_data_get(dev_ctx, &(words[sensor->fifo_pattern_counter]), num_of_words);
+		lsm6ds3_fifo_raw_data_get(dev_ctx, (uint8_t*)words, num_of_words);
+		// sensor->fifo_pattern_counter = (sensor->fifo_pattern_counter + num_of_words % 6) % 6;
 
 		/* Prevent printing data from sensors with unsettled filters */
-		if (!(sensor->settling_counter < SAMPLE_BATCH_SIZE))
+		if (!(sensor->settling_counter < SETTLING_SIZE))
 		{
+			#ifdef JLINK_CONNECTED
 			for (uint16_t i = 0; i < num_of_sets; ++i)
 			{
 				// LOG_DBG("%s\tAcceleration [lsb]:\t0x%.8X\t0x%.8X\t0x%.8X", sensor->name, words[6*i + 3], words[6*i + 4], words[6*i+5]);
@@ -199,6 +203,7 @@ int read_fifo_imu(sensor_t *sensor)
 								  words[6 * i + 3], words[6 * i + 4], words[6 * i + 5],
 								  words[6 * i + 0], words[6 * i + 1], words[6 * i + 2]);
 			}
+			#endif
 			notify_bt_acc(sensor, words, 2 * num_of_words);
 			return num_of_sets;
 		}
@@ -220,15 +225,23 @@ void imu_irq_triggered(const struct device *dev, struct gpio_callback *cb,
 	{
 	case GPIO_IN_PIN3_Msk:
 		atomic_set_bit(&imu_drdy_flag, 0);
+		// k_sem_give(&imu0_sem);
+		// LOG_DBG("1");
 		break;
 	case GPIO_IN_PIN4_Msk:
 		atomic_set_bit(&imu_drdy_flag, 1);
+		// k_sem_give(&imu1_sem);
+		// LOG_DBG("2");
 		break;
 	case GPIO_IN_PIN9_Msk:
 		atomic_set_bit(&imu_drdy_flag, 2);
+		// k_sem_give(&imu2_sem);
+		// LOG_DBG("3");
 		break;
 	case GPIO_IN_PIN10_Msk:
 		atomic_set_bit(&imu_drdy_flag, 3);
+		// k_sem_give(&imu3_sem);
+		// LOG_DBG("4");
 		break;
 	default:
 		return;
@@ -244,6 +257,9 @@ void imu_irq_toggle_handler()
 	{
 		eirq_halt_all();
 		atomic_clear(&imu_drdy_flag);
+		// atomic_clear(&imu1_drdy_flag);
+		// atomic_clear(&imu2_drdy_flag);
+		// atomic_clear(&imu3_drdy_flag);
 		int_1_reg.int1_fth = PROPERTY_DISABLE;
 		LOG_DBG("Disable DRDY INT1");
 	}
@@ -279,15 +295,15 @@ void toggle_imu_fifo_handler(struct k_work *work)
 	if (fifo_mode == LSM6DS3_BYPASS_MODE)
 	{
 		fifo_mode = LSM6DS3_STREAM_MODE;
-		atomic_set_bit(&read_fifo, 0); // indicate FIFO read fn for meas_thd
-		atomic_set_bit(&read_fifo, 1); // indicate bit change
+		atomic_set_bit(&read_fifo, 0);		// indicate FIFO read fn for meas_thd
+		atomic_set_bit(&read_fifo, 1); 		// indicate bit change
 		LOG_DBG("Set FIFO mode to LSM6DS3_STREAM_MODE");
 	}
 	else
 	{
 		fifo_mode = LSM6DS3_BYPASS_MODE;
-		atomic_set_bit(&read_fifo, 0);	 // indicate DATA read fn for meas_thd
-		atomic_clear_bit(&read_fifo, 1); // indicate bit change
+		atomic_clear_bit(&read_fifo, 0);	// indicate DATA read fn for meas_thd
+		atomic_set_bit(&read_fifo, 1);		// indicate bit change
 		LOG_DBG("Set FIFO mode to LSM6DS3_BYPASS_MODE");
 	}
 
@@ -316,15 +332,20 @@ void toggle_imu_fifo_handler(struct k_work *work)
 	} ctrl;
 	ctrl.ctrl1_xl.odr_xl = LSM6DS3_XL_ODR_104Hz;
 	ctrl.ctrl1_xl.fs_xl = LSM6DS3_2g;
-	ctrl.ctrl1_xl.bw_xl = LSM6DS3_ANTI_ALIASING_400Hz;
+	ctrl.ctrl1_xl.bw_xl = LSM6DS3_ANTI_ALIASING_50Hz;
 	ctrl.ctrl2_g.odr_g = LSM6DS3_GY_ODR_104Hz;
-	ctrl.ctrl2_g.fs_g = LSM6DS3_500dps;
+	ctrl.ctrl2_g.fs_g = LSM6DS3_250dps;
 	ctrl.ctrl2_g.not_used_01 = 0;
 
-	lsm6ds3_write_reg(imu_sensor_list[1]->stm_dev, LSM6DS3_CTRL1_XL, ctrl.regs, 2);
-	lsm6ds3_write_reg(imu_sensor_list[0]->stm_dev, LSM6DS3_CTRL1_XL, ctrl.regs, 2);
-	lsm6ds3_write_reg(imu_sensor_list[3]->stm_dev, LSM6DS3_CTRL1_XL, ctrl.regs, 2);
-	lsm6ds3_write_reg(imu_sensor_list[2]->stm_dev, LSM6DS3_CTRL1_XL, ctrl.regs, 2);
+	for (uint8_t i = 0; i < NUMBER_OF_EIRQ; ++i)
+	{
+		lsm6ds3_write_reg(imu_sensor_list[i]->stm_dev, LSM6DS3_CTRL1_XL, ctrl.regs, 2);
+	}
+
+	// lsm6ds3_write_reg(imu_sensor_list[2]->stm_dev, LSM6DS3_CTRL1_XL, ctrl.regs, 2);
+	// lsm6ds3_write_reg(imu_sensor_list[0]->stm_dev, LSM6DS3_CTRL1_XL, ctrl.regs, 2);
+	// lsm6ds3_write_reg(imu_sensor_list[3]->stm_dev, LSM6DS3_CTRL1_XL, ctrl.regs, 2);
+	// lsm6ds3_write_reg(imu_sensor_list[1]->stm_dev, LSM6DS3_CTRL1_XL, ctrl.regs, 2);
 }
 K_WORK_DEFINE(toggle_imu_fifo, toggle_imu_fifo_handler);
 

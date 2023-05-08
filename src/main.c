@@ -134,42 +134,58 @@ static void mpu_ccc_cfg_changed(const struct bt_gatt_attr *attr, uint16_t value)
 }
 
 /* BLE Sensor GATT services and characteristic */
-#define TX_DATA_BUFFER_SIZE 85
+#define TX_DATA_BUFFER_SIZE 250
 volatile uint8_t tx_buffer[TX_DATA_BUFFER_SIZE] = {0xAA, 0xBB, 0xCC, 0xCD, 0xBC, 0xAB};
+static uint8_t msgCounter[4];
 BT_GATT_SERVICE_DEFINE(stsensor_svc,
 					   BT_GATT_PRIMARY_SERVICE(&primary_service_uuid),
 					   BT_GATT_CHARACTERISTIC(&rx_char_uuid.uuid,
-											  BT_GATT_CHRC_WRITE | BT_GATT_CHRC_WRITE_WITHOUT_RESP,
+											  BT_GATT_CHRC_WRITE_WITHOUT_RESP,
 											  BT_GATT_PERM_READ | BT_GATT_PERM_WRITE,
 											  NULL, on_receive, NULL),
 					   BT_GATT_CHARACTERISTIC(&tx_char_uuid.uuid, BT_GATT_CHRC_NOTIFY,
 											  BT_GATT_PERM_READ, NULL, NULL, NULL),
 					   BT_GATT_CCC(mpu_ccc_cfg_changed, BT_GATT_PERM_READ | BT_GATT_PERM_WRITE), );
 
-void print_array(char *dest, const uint8_t *src, uint16_t len)
+void print_array(char *dest_hex, uint8_t* dest_raw, const uint8_t *src, uint16_t len)
 {
 	for (uint16_t i = 0; i < len; ++i)
 	{
 		char hex_byte[3];
-		sprintf(hex_byte, "%X", src[i]);
-		strcat(dest, hex_byte);
+		sprintf(hex_byte, "%2X", src[i]);
+		strcat(dest_hex, hex_byte);
+		dest_raw[i] = src[i];
 	}
-	strcat(dest, "\0");
+	dest_raw[len] = 0;
+	strcat(dest_hex, "\0");
 }
 
 static ssize_t on_receive(struct bt_conn *conn,
 						  const struct bt_gatt_attr *attr, const void *buf,
 						  uint16_t len, uint16_t offset, uint8_t flags)
 {
-	const uint8_t *buffer = buf;
-	char data[len];
-	print_array(data, buffer, len);
-	LOG_DBG("Received BT %s", data);
-	if (strcmp(data, "START") == 0 || strcmp(data, "STOP") == 0)
+	uint8_t buffer[len+1];
+	char data[2*len+1];
+	static bool isFifo = false;
+	memset(data,0,len);
+	memset(buffer,0,len);
+	print_array(data, buffer, (uint8_t *)buf, len);
+	LOG_DBG("Received BT %u bytes with offset %u:\nHEX: %s\nRAW: %s", len, offset, data, buffer);
+	if ((strcmp(buffer, "START") == 0 && !isFifo) || (strcmp(buffer, "STOP") == 0 && isFifo))
 	{
 		extern struct k_work toggle_imu_fifo;
 		k_work_submit(&toggle_imu_fifo);
 		led_update(0);
+		if(isFifo)
+		{
+			memset(msgCounter,0,4*sizeof(uint8_t));
+			isFifo = false;
+		}
+		else
+		{
+			isFifo = true;
+		}
+		// isFifo = isFifo ? false : true;
 	}
 	return 0;
 }
@@ -294,10 +310,11 @@ void notify_bt_acc(sensor_t *sensor, uint8_t *data_arr, uint16_t size)
 			}
 
 			memset(tx_buffer, 0, TX_DATA_BUFFER_SIZE);
-			if (size+1 <= TX_DATA_BUFFER_SIZE)
+			if (size + 2 <= TX_DATA_BUFFER_SIZE)
 			{
 				tx_buffer[0] = imuId;
-				memcpy(tx_buffer+1, data_arr, size * sizeof(uint8_t));
+				tx_buffer[1] = msgCounter[imuId - 1];
+				memcpy(tx_buffer + 2, data_arr, size * sizeof(uint8_t));
 			}
 			else
 			{
@@ -312,7 +329,7 @@ void notify_bt_acc(sensor_t *sensor, uint8_t *data_arr, uint16_t size)
 				.uuid   = &tx_char_uuid.uuid,
 				.attr   = attr,
 				.data   = tx_buffer,
-				.len    = size+1,
+				.len    = size+2,
 				.func   = NULL
 			};
 
@@ -322,6 +339,10 @@ void notify_bt_acc(sensor_t *sensor, uint8_t *data_arr, uint16_t size)
 			if (err)
 			{
 				LOG_ERR("Notify error: %d", err);
+			}
+			else
+			{
+				++msgCounter[imuId - 1];
 			}
 		}
 		else

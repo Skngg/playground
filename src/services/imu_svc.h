@@ -11,6 +11,7 @@
 #include <logging/log.h>
 
 #define SAMPLE_BATCH_SIZE 5
+#define SETTLING_SIZE 10
 
 #ifdef __cplusplus
 extern "C"

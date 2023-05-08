@@ -13,14 +13,18 @@
 #include "../services/imu_svc.h"
 #include "../services/segger_svc.h"
 
-#define MEAS_THD_PRIORITY   8
-#define MEAS_THD_STACK_SIZE 2048
+#define MEAS_THD_PRIORITY   -1
+#define MEAS_THD_STACK_SIZE 4096
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 void meas_thd_entry(void *p1, void *p2, void *p3);
+void meas_thd_0_entry(void *p1, void *p2, void *p3);
+void meas_thd_1_entry(void *p1, void *p2, void *p3);
+void meas_thd_2_entry(void *p1, void *p2, void *p3);
+void meas_thd_3_entry(void *p1, void *p2, void *p3);
 
 #ifdef __cplusplus
 }

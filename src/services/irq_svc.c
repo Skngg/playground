@@ -15,6 +15,12 @@ const struct gpio_dt_spec eirq[NUMBER_OF_EIRQ] = {GPIO_DT_SPEC_GET(DT_NODELABEL(
 												  GPIO_DT_SPEC_GET(DT_NODELABEL(imu_3), gpios)};
 static struct gpio_callback gpio_irq_cb[NUMBER_OF_EIRQ];
 atomic_t imu_drdy_flag = 0;
+K_SEM_DEFINE(imu0_sem, 0, 4);
+K_SEM_DEFINE(imu1_sem, 0, 4);
+K_SEM_DEFINE(imu2_sem, 0, 4);
+K_SEM_DEFINE(imu3_sem, 0, 4);
+K_MUTEX_DEFINE(i2c0_mutex);
+K_MUTEX_DEFINE(i2c1_mutex);
 
 int eirq_init(gpio_callback_handler_t handler)
 {

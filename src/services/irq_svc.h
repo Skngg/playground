@@ -15,6 +15,14 @@ extern "C" {
 
 extern atomic_t imu_drdy_flag;
 
+extern struct k_sem imu0_sem;
+extern struct k_sem imu1_sem;
+extern struct k_sem imu2_sem;
+extern struct k_sem imu3_sem;
+
+extern struct k_mutex i2c0_mutex;
+extern struct k_mutex i2c1_mutex;
+
 int eirq_init(gpio_callback_handler_t handler);
 int eirq_halt(uint8_t i);
 int eirq_resume(uint8_t i);

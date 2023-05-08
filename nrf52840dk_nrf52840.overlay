@@ -4,6 +4,7 @@
 &arduino_i2c {
     compatible = "nordic,nrf-twim";
     clock-frequency = <I2C_BITRATE_FAST>;
+    status = "okay";
 };
 
 &i2c1 {

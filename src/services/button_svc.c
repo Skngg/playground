@@ -68,7 +68,6 @@ int button_init(gpio_callback_handler_t handler)
 void button_callback(const struct device *gpiob, struct gpio_callback *cb,
 					 uint32_t pins)
 {
-	extern atomic_t imu_drdy_flag;
 	extern struct k_work imus_irq_toggle, read_slow_all_imu_work, toggle_imu_fifo;
 	if (0 == k_timer_remaining_get(&button_debounce_timer))
 	{
@@ -83,6 +82,7 @@ void button_callback(const struct device *gpiob, struct gpio_callback *cb,
 		{
 			/* Start capturing measurments */
 			k_work_submit(&toggle_imu_fifo);
+			// thread_analyzer_print();
 		}
 		else if (pins == GPIO_IN_PIN24_Msk)
 		{
@@ -103,7 +103,6 @@ void button_callback(const struct device *gpiob, struct gpio_callback *cb,
 		{
 			/* Read all imus (NO FIFO) */
 			k_work_submit(&read_slow_all_imu_work);
-			atomic_clear(&imu_drdy_flag);
 		}
 	}
 }
